@@ -1,0 +1,238 @@
+---
+title: "Ejercicio 3"
+format: html
+jupyter: ir
+---
+
+# Planteamiento
+
+Ejercicio 2: Carreras más postuladas por región.
+
+Para este segundo ejercicio, trabajaremos los datos de postulación a carreras universitarias en chile. Para esto contamos con la sigiguiente [carpeta de datos](https://www.dropbox.com/sh/uw9u1wlwi189lbw/AAD9rRWQsBLskP3hexaOk08Ba?dl=0)
+
+Cuando queremos hacer rankings, en general no basta con solo contar la frecuencia de eventos. Tenemos que considerar efectos de tamaños. Por ejemplo, para hacer comparables todas las carreras y todas las regiones, necesitamos considerar la cantidad total de postulantes de cada región y la cantidad de postulaciones a cada carrera. Una medida que controla por estos dos factores es el Balassa Index o RCA.
+
+Por lo general, $M_{cp}$ se define como $M_{cp} = 1$ cuando la cantidad de postulaciones a una carrera en una comuna es mayor que lo esperado para una comuna del mismo tamaño y una carrera con la misma cantidad de postulciones.
+
+$$ M_{cp} = 1 \quad \text{if} \quad R_{cp} \geq 1$$
+
+Donde $$ R_{cp}= \frac{X_{cp}}{X_c X_o / X}$$
+
+-   $X_{cp}$ es la matriz que asocia comunas y carreras y cada entrada corresponde al número de postulaciones en una comuna c de una carrera p.
+-   $X_{p} = \sum_p X_{cp}$ es el vector que contiene el número de postulaciones en todas las carreras para cada comuna c.
+-   $X_{c} = \sum_{p} X_{cp}$ es el vector que contiene el número de postulaciones en todas las comunas para cada carrera p.
+-   $X = \sum_{cp} X_{cp}$ es el número total de postulaciones.
+
+Por tanto, el denominador de la ecuación $R_{cp}$ corresponde a las postulaciones esperadas de la comuna c para la carrera p. En otras palabras, el denominador es igual a la cantidad de postulaciones de una comuna ($X_c = \sum_p X_{cp}$) multiplicado por la cantidad de postulaciones totales a esa carrera ($X = \sum_p X_{cp}$) dividido por el número total de postulaciones utilizadas en todo el país (L Xp).
+
+1)  Para cada región, construya el ranking de las top-10 carreras más postuladas en primera opción. (Ordene las columnas usando el Balassa index no-discreto; balassa_index(incidence_matrix_1st,discrete=F))
+
+2)  Construya el ranking top-10 para las siguientes comunas: Santiago, Las Condes, Vitacura, Providencia, Puente Alto, Maipú, Concepción, Valparaíso, Viña del Mar, La Serena, Antofagasta, Iquique, Arica, Rancagua, Talca, Linares, Los Ángeles, Chillán, Temuco, Osorno, Puerto Montt, Castro, Chiloé, Aysén, Punta Arenas.
+
+3)  Grafique la red de carreras usando balassa_index(incidence_matrix_1st, discrete = T) y avg_links = 8.
+
+4)  Repita el punto 2 con una red a nivel a nivel región y comuna (ojo con los valores nan de la matriz de proximidad).
+
+# Desarrollo
+
+## Carga de datos y preparación
+
+Primer cargamos los datos que vamos a usar. Para esto descargamos la carpeta de dropbox, la ponemos en el directorio
+
+Como trabajaremos y transformaciones de datos, carga y redes carguemos los paquetes tidyverse, readr y igraph. Para el balassa index vamos a usar tambien el economiccomplexity
+
+```{r}
+
+library(tidyverse)
+library(igraph)
+```
+
+
+### 1. Carga data
+
+Vamos a cargar los datos de las postulaciones, información de los postulantes (pues necesitamos su region) e información de las carreras.
+
+1)  Lea el archivo `POSTULACIONES.csv`. Use `read.csv("./Data/POSTULACIONES.csv", header=T, sep = ';')`
+
+```{r}
+links <- read.csv("./data_carreras/POSTULACIONES.csv", header=T, sep = ';')
+carrega_generica <- read.csv("./data_carreras/Career_genericCarreer.csv", header=T)#, sep = ';')
+individual_attr <-readRDS("./data_carreras/transformados3103.rds")
+
+```
+
+Las tres bases de datos, una indica como fueron realizadas las postulaciones por cada persona, identificada por su MRUN (máscara del rut)
+
+Dado que hubo ciertos cambios en el proceso de postulación, trabajaremos con los datos desde 2012 y nos centraremos en los estudiantes con postulaciones válidas y menores de 25 años de edad.
+
+Realizamos el filtado las entradas para `AÑO_PROCESO >=2012`, `SITUACION_POSTULANTE=="P"` (P: postulaciones válidas) y `EDAD<=21`. Use de la libreria `tidyverse` el comando `filter`.
+
+
+```{r}
+# Filtra postulaciones
+links_filtered <- links%>%filter(AÑO_PROCESO >=2012, SITUACION_POSTULANTE=='P', EDAD<=25)%>%
+                           mutate(MRUNANIO=paste0(MRUN,'-',AÑO_PROCESO))%>%
+                           drop_na(MRUNANIO,AÑO_PROCESO)%>% 
+                        #nos vamos a quedar con los datos que utilizaremos: AÑO_PROCESO MRUN MRUNANIO PREFERENCIA CODIGO_REGION_EGRESO y Generic career
+                            select(AÑO_PROCESO, MRUN, MRUNANIO, PREFERENCIA, CODIGO_CARRERA_GENERICA, CODIGO_CARRERA  )
+
+head(links_filtered)
+
+```
+
+Como deseamos la primera preferencia, realizamos ese filtro. luego le agregamos los datos individuales desde el data frame de atributos. En especial nos interesa la carrera, la comuna y la region.
+
+```{r}
+# filtramos solo las primeras preferencias y juntamos con datos a nivel individual
+links_filtered_1st<-links_filtered %>% filter(PREFERENCIA==1) %>%
+                                        dplyr::select(-PREFERENCIA,-CODIGO_CARRERA)%>%
+                                        inner_join(filter(individual_attr, PREFERENCIA==1),by = c('MRUNANIO','MRUN'))
+
+#%>% 
+                                     #drop_na(CODIGO_COMUNA_DOMICILIO)
+dim(links_filtered_1st)
+head(links_filtered_1st)
+
+
+```
+
+```{r}
+table(links_filtered_1st$PREFERENCIA)
+```
+
+
+3)  Crear la matriz de incidencia. Las filas representan personas (`MRUN`) y las columnas carreras (`CODIGO_CARRERA_GENERICA`)
+
+Realizamos la agrupación geográfica a nivel de regiones de egreso primero.
+
+Para hacer la matriz de incicidencia, primero hacemos una tabla de doble entrada entre todas la combinaciones de regiones(Este ejemplo, la idea es que ustedes lo pasen a comunas) y carreras.
+
+```{r}
+# Matriz de incidencia
+#CODIGO_REGION_DOMICILIO
+#CODIGO_PROVINCIA_DOMICILIO
+#CODIGO_COMUNA_DOMICILIO
+
+incidence_matrix_1st<-as.matrix(unclass(table(cbind.data.frame(Geo=links_filtered_1st$CODIGO_REGION_EGRESO,
+                                         Carrera_Generica=links_filtered_1st$GenericCareer))))
+
+
+view(incidence_matrix_1st)
+```
+
+Nos apoyamos en el paquete `economic complexity` para calcular el índice balassa y depurar la matriz de incidencia directa, para que considere las diferencias de tamaño entre regiones.
+
+```{r}
+#install.packages('rbibutils')#Instale este paquete primero
+#install.packages("economiccomplexity")# Luego instale este paquete
+
+library(economiccomplexity)
+```
+
+```{r}
+#### Analizando una red bipartita usando ventaja comparativa revelada (RCA) ####
+
+#Balassa index o RCA
+balassa<-(balassa_index(incidence_matrix_1st, discrete = T,cutoff = 1))
+balassa_copy<-as.matrix(balassa_index(incidence_matrix_1st, discrete = T,cutoff = 1))
+
+
+complex<-complexity_measures(balassa, method = "reflections", iterations = 20,extremality = 1)
+
+```
+
+```{r}
+
+#Calcula dos matrices que dan cuenta de la similitud entre pares de comunas/regiones y pares de carreras
+prox<-proximity(balassa, compute = "both")
+
+# prox$proximity_product
+
+# Para proyectar las redes sobre las unidades geográficas y sobre carreras.
+proj<-projections(prox$proximity_country,prox$proximity_product,avg_links = 8,tolerance = 0.05,compute = "both")
+
+
+```
+
+Graficamos la projección en carreras:
+
+```{r}
+l <- layout_with_fr(proj$network_product)
+head(l)
+```
+
+```{r}
+
+####
+balassa_graph<-graph_from_incidence_matrix(balassa_copy)
+
+balassa_graph
+```
+
+```{r}
+BG <- bipartite.projection(balassa_graph)
+
+BG
+```
+
+```{r}
+ hist(degree(BG$proj2))
+```
+
+Ordenamos ahora por el índice de complejidad:
+
+```{r}
+sort(complex$complexity_index_product,decreasing = T)
+sort(complex$complexity_index_country,decreasing = T)
+```
+
+y podemos graficar:
+
+```{r}
+plot(proj$network_product,vertex.size=degree(proj$network_product)^(1/2),vertex.label=NA,layout=l) #Red de carreras
+```
+
+```{r}
+plot(BG$proj2,vertex.size=degree(BG$proj2)^(1/5),vertex.label=NA)#,layout=l)#Red de carreras
+# plot(BG)
+```
+
+```{r}
+# Para proyectar las redes sobre las unidades geográficas y sobre carreras.
+proj<-projections(prox$proximity_country,prox$proximity_product,avg_links = 8,tolerance = 0.05,compute = "both")
+
+plot(proj$network_product,vertex.size=.2)#Red de carreras
+
+plot(proj$network_country,vertex.size=.2)#Red de regiones-comunas que están vinculadas por las 
+
+
+plot(BG$proj2,vertex.size=.2,layaout=l)
+```
+
+Todo esto fue a nivel de regiones.
+
+Si en cambio, desearamos hacerlo por comunas (para responder la pregunta del enunciado:).... y realizamos los filtros correspondientes
+
+```{r}
+# COMUNA
+# Matriz de incidencia
+#CODIGO_REGION_DOMICILIO
+#CODIGO_PROVINCIA_DOMICILIO
+#CODIGO_COMUNA_DOMICILIO
+
+incidence_matrix_1st_com<-as.matrix(unclass(table(cbind.data.frame(Geo=links_filtered_1st$CODIGO_COMUNA_DOMICILIO,
+                                         Carrera_Generica=links_filtered_1st$CODIGO_CARRERA_GENERICA))))
+head(incidence_matrix_1st_com)
+
+#### Analizando una red bipartita usando ventaja comparativa revelada (RCA) ####
+
+#Balassa index o RCA
+balassa<-as.matrix(balassa_index(incidence_matrix_1st_com, discrete = T,cutoff = 2))
+balassa_graph<-graph_from_incidence_matrix(balassa)
+BG <- bipartite.projection(balassa_graph)
+l <- layout_with_fr(BG$proj2)
+
+hist(degree(BG$proj2))
+```
+
+

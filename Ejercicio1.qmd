@@ -1,0 +1,83 @@
+---
+title: "Ejercicio 1 - degree preserving randomization"
+format: html
+jupyter: ir
+---
+
+## Ejercicio 1: Degree preserving randomizaction
+
+En esta primera aplicación, volveremos a los datos de los colegios para ejemplificar la implementación de una randomización sencilla.
+
+1.  Cargue los datos de intercambios diádicos de un curso y construlla la red direccionada y la no direccionada en la cual al menos uno de los dos integrantes envio 10 tokens. (puede re-usar código de la sesión pasada)
+
+```{r}
+diadas <- read.csv("./data_colegios/Data_diadas_ayudantia5.csv", header=T, sep = ',')
+individuos <- read.csv("./data_colegios/Data_indiv_ayudantia5.csv", header=T, sep = ',')
+```
+
+
+```{r}
+diadas_filtrado <- diadas %>% filter(Id_Curso==11)
+individuos_filtrado <- individuos %>% filter(Id_Curso==11)
+```
+
+
+Red direccionada:
+
+```{r}
+
+edgelist_2 <- diadas_filtrado %>% 
+              filter(weight==10) %>%
+              select(Id_Emisor, Id_Receptor)
+
+g2 <- igraph::graph_from_data_frame(edgelist_2 , directed = T)
+
+plot(g2)
+```
+
+
+2.  Obtenga la matriz de incidencia de la red.
+
+
+Del paquete igraph usamos sencillamente as_adjacency_matrix
+
+
+```{r}
+matrix_AF<-lapply(g2,igraph::as_adjacency_matrix,names=TRUE,sparse=FALSE, attr="weight" ) #matrices de ayacencia_Full muestra
+
+```
+
+```{r}
+matrix_adj <- igraph::as_adjacency_matrix(g2, names=TRUE, sparse=FALSE)
+
+matrix_adj
+```
+
+En el cual cada fila representa que los envios de un individuo a cada uno de sus compañeros fue sobre 10.
+
+```{r}
+matrix_adj[1,]
+```
+
+
+Un elemento de la matriz de adyacencia corresponde a una interacción diádica sobre 10 específica. Por ejemplo, el individio 316 le envió 10 tokens al individuo 325.
+
+```{r}
+matrix_adj[1,][2]
+```
+
+Las recepciones están en las columnas.
+
+En la matriz de adjacencia:
+- Cada emisor es una fila
+- Cada receptor es una columna 
+- Cada interacción diadica es una celda filaxcolumna
+
+
+3.  Genere un modelo nulo que mantenga el grado de cada nodo.
+
+
+
+4.  Genere un modelo nulo,manteniendo el total de envios (out degree) de cada nodo.
+
+5.  Genere un modelo nulo manteniendo el total de recepciones (in degree) de cada nodo.

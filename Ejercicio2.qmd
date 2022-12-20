@@ -1,0 +1,264 @@
+---
+title: "Ejercicio 2"
+format: html
+---
+
+# Ejercicio 2: Red de carreras y phi-correlation.
+
+En este segundo ejercicio pasaremos a trabajar con los datos de postulación a carreras universitarias en Chile.
+
+![](images/image-1114643002.png)
+
+Para esto contamos con la sigiguiente [carpeta de datos](https://www.dropbox.com/sh/uw9u1wlwi189lbw/AAD9rRWQsBLskP3hexaOk08Ba?dl=0)
+
+En esta red, bipartita, consideraremos dos carreras conectadas si son co-postuladas por un individuo.
+
+Cada individuo, anonimizado con un MRUN único, puede postular a una o más carreras. Nosotros, vamos a crear una red de carreras en función de  las postulaciones de los individuos. Posteriormente analizaremos esta red.
+
+Como se muestra en la figura, cada individuo puede postular a una o mas carreras con el mismo nombre. Para estos efectos, fitraremos los enlaces con carreras repetidas en ambos extremos (bucles).
+
+**Nota: Para construir la red de carreras usamos una agregación propuesta y operacionalizada por el Ministerio de Educación de Chile, llamada carrear genérica. De esta forma, podemos agrupar todas las carreras que son equivalentes pero tienen distintos nombres en distintas instituciones.**
+
+![](images/image-237919864.png)
+ 
+ 1. Cosntruyamos la matriz de incidencia y su proyección como red de carreras.
+ 
+ 
+1. 1) Lea el archivo `POSTULACIONES.csv`. Use `read.csv("./Data/POSTULACIONES.csv", header=T, sep = ';')`
+
+Librerias con las que vamos a trabajar:
+
+```{r}
+library(tidyverse, igraph)
+```
+
+
+```{r}
+links <- read.csv("./data_carreras/POSTULACIONES.csv", header=T, sep = ';')
+carrega_generica <- read.csv("./data_carreras/Career_genericCarreer.csv", header=T)#, sep = ';')
+individual_attr <-readRDS("./data_carreras/transformados3103.rds")
+
+```
+
+1.2) Filtre las entradas para `AÑO_PROCESO >=2012`, `SITUACION_POSTULANTE=="P"` (P: postulaciones válidas) y `EDAD<=21`. Use de la libreria `tidyverse` el comando `filter`.
+
+
+```{r}
+# Filtra postulaciones
+links_filtered <- links%>%filter(AÑO_PROCESO >=2012, SITUACION_POSTULANTE=='P', EDAD<=25)%>%
+                           mutate(MRUNANIO=paste0(MRUN,'-',AÑO_PROCESO))%>%
+                           drop_na(MRUNANIO,AÑO_PROCESO)
+head(links_filtered)
+```
+
+```{r}
+dim(links)
+head(links)
+
+head(carrega_generica)
+
+dim(individual_attr)
+head(individual_attr)
+```
+
+1.3) Crear la matriz de incidencia. Las filas representan personas (`MRUN`) y las columnas carreras (`CODIGO_CARRERA_GENERICA`)
+
+
+```{r}
+# Matriz de incidencia
+
+incidence_matrix<-as.data.frame(unclass(table(cbind.data.frame(MRUN=links_filtered$MRUNANIO,
+                                         Carrera_Generica=links_filtered$CODIGO_CARRERA_GENERICA))))
+head(incidence_matrix)
+dim(incidence_matrix)
+class(incidence_matrix)
+```
+
+
+1.4) Use `graph_from_incidence_matrix` para crear el objeto igraph. Luego, proyecte la red sobre la dimensión de carreras.
+
+```{r}
+G  <- igraph::graph_from_incidence_matrix(incidence_matrix,directed = F)
+G
+```
+
+Proyeccion:
+
+Método 1:
+
+```{r}
+# # Proyeccion bipartita método 1: Ambos modos. (demora)
+# BG <- bipartite.projection(G)
+# BG1 <- BG$proj1
+# BG2 <- BG$proj2
+
+# rep(1, length(as.numeric(links_filtered$MRUNANIO)))[1:100]
+
+head(links_filtered)
+```
+
+
+Método 2: 
+
+Usando la matriz de co-ocurrencias construimos una matriz.
+
+```{r}
+library('Matrix')
+
+A <- Matrix::spMatrix(
+              nrow=length(unique(links_filtered$MRUNANIO)),
+              ncol=length(unique(links_filtered$CODIGO_CARRERA_GENERICA)),
+              i = as.numeric(factor(links_filtered$MRUNANIO)),
+              j = as.numeric(factor(links_filtered$CODIGO_CARRERA_GENERICA)),
+              x = rep(1, length(as.numeric(links_filtered$MRUNANIO))) 
+             )
+
+row.names(A) <- levels(factor(links_filtered$MRUNANIO))
+colnames(A) <- levels(factor(links_filtered$CODIGO_CARRERA_GENERICA))
+
+
+# Arow <- tcrossprod(A)#conect people from carreers
+Acol <- tcrossprod(t(A))#Connect carreers from people
+co_matrix<-as.matrix(Acol)#Adjacency matrix Degree
+# G<-graph_from_adjacency_matrix(co_matrix,mode='undirected', diag=F,weighted=TRUE)
+```
+
+```{r}
+
+V(G)$Carrera_generica<-as.character(carrega_generica$Generic.Career[match(V(G)$name,carrega_generica$Generic.Career.ID)])
+
+V(G)$Carrera_generica2<-ifelse((degree(G)>159)|(degree(G)<100),V(G)$Carrera_generica,'')
+
+E(G)$width <- ifelse(E(G)$weight>=100*median(E(G)$weight),E(G)$weight^1/1500,0)
+
+```
+
+```{r}
+hist(degree(G))
+mean(degree(G))
+median(degree(G))
+summary((degree(G)))
+
+hist((E(G)$weight),breaks=100)
+
+median(E(G)$weight)
+
+```
+
+
+
+```{r}
+options(repr.plot.width=14, repr.plot.height=14)
+
+l <- layout_with_fr(G)
+l <- layout_on_sphere(G)
+# l <- layout_in_circle(G)
+
+
+
+plot(G,vertex.size=degree(G)^1/20,vertex.label=V(G)$Carrera_generica2,layout=l)#,edge.size=E(G)$weight)
+```
+
+ 
+ 2. Esta red cuenta con mucho ruido, vamos a filtrarla mediante phi correlation es decir, su significancia estratégica. 
+En general las redes bipartitas capturan señal y ruido. 
+
+Ahora, vamos a repetir el ejercicio anterior pero filtrando la red en función de la significancia de sus enlaces.
+
+
+![](images/image-299266272.png)
+
+
+Para esto usaremos la siguiente función:
+
+
+```{R}
+#### Filtra red bipartita usando correlación phi y t-statistic ####
+
+phi_correlation<-function(net){
+    require(stats)
+    
+    d_free=t_bin=phi=t=phi_filterd=matrix(ncol = length(net[,1]),nrow = length(net[,1]))
+    N=sum(net)#Suma en toda la matriz
+    k=0
+
+    for(i in 1:length(net[,1])){
+      Mi<-sum(net[,i])
+      for(j in 1:length(net[,1])){
+        k=k+1
+        Mj<-sum(net[,j])
+        phi[i,j]<-((net[i,j]*N)-(Mi*Mj))/(sqrt(Mi*Mj*(N-Mi)*(N-Mj)))
+        D=max(Mi,Mj)
+        d_free[i,j]=D
+        phi_cut=ifelse(phi[i,j]>=0,phi[i,j],0) # solo correlaciones postivias
+        #https://www.statology.org/p-value-from-t-score-python/
+        #https://courses.lumenlearning.com/introstats1/chapter/testing-the-significance-of-the-correlation-coefficient/
+        t[i,j]<-phi_cut*(sqrt(D-2))/sqrt(1-phi_cut^2)#T-value for correlations
+#         c_val=qt(0.05, D-2, lower.tail = FALSE)#Critical value in the distribution de la acumulada
+        pval<-pt(q=t[i,j], df=D-2, lower.tail=FALSE)
+#         t[i,j]<-ifelse(t[i,j]>=c_val,t[i,j],0) #usa la acumulada
+        t[i,j]<-ifelse(pval<=0.05,t[i,j],0) 
+        t_bin[i,j]<-ifelse(t[i,j]>=c_val,1,0)# matriz binaria 
+        phi_filterd[i,j]<-ifelse(t[i,j]>=c_val,phi[i,j],0)
+      }
+    }
+
+    colnames(t)=colnames(net)
+    rownames(t)=rownames(net)
+    colnames(t_bin)=colnames(net)
+    rownames(t_bin)=rownames(net)
+    colnames(phi_filterd)=colnames(net)
+    rownames(phi_filterd)=rownames(net)
+#     return(gg<-list(t_bin,phi_filterd))
+    return(t_bin)
+}
+```
+
+
+
+```{r}
+D=250
+phi_cut=0.11
+
+t=phi_cut*(sqrt(D-2))/sqrt(1-phi_cut^2)
+t
+
+
+# qt(0.95, D-2, lower.tail = FALSE)
+
+pt(q=t, df=25-2, lower.tail=FALSE)
+
+```
+
+
+```{r}
+l <- layout_with_fr(G2)
+```
+
+
+```{r}
+res<-phi_correlation(co_matrix)
+
+G2<-graph_from_adjacency_matrix(res,mode='undirected', diag=F,weighted=TRUE)
+
+V(G2)$Carrera_generica<-as.character(carrega_generica$Generic.Career[match(V(G2)$name,carrega_generica$Generic.Career.ID)])
+
+V(G2)$Carrera_generica2<-ifelse(degree(G2)>10,V(G2)$Carrera_generica,'')
+
+```
+
+
+```{r}
+options(repr.plot.width=14, repr.plot.height=14)
+
+plot(G2,vertex.size=degree(G2)^1/3,vertex.label=V(G2)$Carrera_generica2,layout=l)
+```
+
+
+```{r}
+length(V(G2))
+
+print(paste0('Ratio de enlaces existentes: ',round(length(E(G2))/(length(V(G2))*(length(V(G2))-1)/2)*100,2),'%'))
+```
+
+
